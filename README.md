@@ -86,6 +86,16 @@ Now you can simply run `torrra` to start searching:
 torrra # default indexer will be used
 ```
 
+Other useful settings:
+
+```bash
+# Skip the welcome screen and go straight to the home screen
+torrra config set general.disable_welcome_screen true
+
+# Automatically pause torrents once they finish downloading (no seeding)
+torrra config set general.disable_seeding true
+```
+
 [Learn more about configuration →](https://torrra.readthedocs.io/en/latest/configuration.html)
 
 ## Features
