@@ -1,0 +1,27 @@
+[general]
+download_path = "/Users/romain/Library/Mobile Documents/com~apple~CloudDocs/Movies/Torrents/"
+download_in_external_client = false
+theme = "solarized-light"
+timeout = 10
+max_retries = 3
+use_cache = true
+cache_ttl = 300
+disable_seeding = true
+disable_welcome_screen = true
+
+[indexers]
+default = "jackett"
+
+[indexers.jackett]
+url = "http://localhost:9117"
+api_key = ""
+
+[transcoding]
+enabled = true
+destination_path = "/Users/romain/Library/Mobile Documents/com~apple~CloudDocs/Movies/Films/"
+ffmpeg_path = "ffmpeg"
+max_parallel_jobs = 3
+rules = [
+    { input_extension = ".mkv", output_format = "mp4", resolution = "720p" },
+    { input_extension = ".avi", output_format = "mp4", resolution = "720p" },
+]
