@@ -1,4 +1,5 @@
 import subprocess
+from enum import Enum
 from typing import cast
 
 from textual import on, work
@@ -18,6 +19,11 @@ from torrra.utils.magnet import resolve_magnet_uri
 from torrra.widgets.data_table import AutoResizingDataTable
 from torrra.widgets.details_panel import DetailsPanel
 from torrra.widgets.spinner import Spinner
+
+
+class SortMode(Enum):
+    RELEVANCY = "relevancy"
+    SEEDERS = "seeders"
 
 
 class SearchContent(Vertical):
@@ -50,7 +56,9 @@ class SearchContent(Vertical):
 
         # application states
         self._search_results_map: dict[str, Torrent] = {}
+        self._search_results_list: list[Torrent] = []  # original order from indexer
         self._selected_torrent: Torrent | None = None
+        self._sort_mode: SortMode = SortMode.RELEVANCY
 
         # ui refs (cached later)
         self._search_input: Input
@@ -85,6 +93,55 @@ class SearchContent(Vertical):
             self._table.add_column(label, width=width, key=key)
         # send initial search
         self.post_message(Input.Submitted(self._search_input, self.search_query))
+
+    def key_s(self) -> None:
+        """Toggle sort mode between relevancy and seeders."""
+        if not self._search_results_list:
+            return
+
+        # Toggle sort mode
+        if self._sort_mode == SortMode.RELEVANCY:
+            self._sort_mode = SortMode.SEEDERS
+        else:
+            self._sort_mode = SortMode.RELEVANCY
+
+        self._refresh_table()
+
+    def _get_sorted_results(self) -> list[Torrent]:
+        """Return results sorted according to current sort mode."""
+        if self._sort_mode == SortMode.SEEDERS:
+            return sorted(
+                self._search_results_list,
+                key=lambda t: t.seeders,
+                reverse=True,
+            )
+        # RELEVANCY: return original order
+        return list(self._search_results_list)
+
+    def _refresh_table(self) -> None:
+        """Refresh the table with current sort mode."""
+        self._table.clear()
+        sorted_results = self._get_sorted_results()
+
+        seen: set[str] = set()
+        for idx, torrent in enumerate(sorted_results):
+            if torrent.magnet_uri in seen:
+                continue
+
+            seen.add(torrent.magnet_uri)
+            self._table.add_row(
+                str(idx + 1),
+                torrent.title,
+                human_readable_size(torrent.size),
+                f"{str(torrent.seeders)}:{str(torrent.leechers)}",
+                key=torrent.magnet_uri,
+            )
+
+        # Update border title to show sort mode
+        sort_label = "seeders" if self._sort_mode == SortMode.SEEDERS else "relevancy"
+        self._table.border_title = (
+            f"results ({len(sorted_results)}) [dim]sorted by {sort_label} (s)[/dim]"
+        )
 
     async def key_enter(self) -> None:
         if not self._details_panel.has_focus:
@@ -182,22 +239,14 @@ class SearchContent(Vertical):
         self._loader.add_class("hidden")
         self._table.remove_class("hidden")
         self._table.focus()  # initial focus table
-        self._table.border_title = f"results ({len(message.results)})"
 
-        seen: set[str] = set()
-        for idx, torrent in enumerate(message.results):
-            if torrent.magnet_uri in seen:
-                continue
+        # Store results and build lookup map
+        self._search_results_list = message.results
+        self._search_results_map = {t.magnet_uri: t for t in message.results}
 
-            seen.add(torrent.magnet_uri)
-            self._search_results_map[torrent.magnet_uri] = torrent
-            self._table.add_row(
-                str(idx + 1),
-                torrent.title,
-                human_readable_size(torrent.size),
-                f"{str(torrent.seeders)}:{str(torrent.leechers)}",
-                key=torrent.magnet_uri,
-            )
+        # Reset to default sort mode on new search
+        self._sort_mode = SortMode.RELEVANCY
+        self._refresh_table()
 
     def on_details_panel_closed(self):
         self._selected_torrent = None
