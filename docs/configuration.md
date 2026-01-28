@@ -26,7 +26,7 @@ timeout = 10                                  # The timeout in seconds for reque
 max_retries = 3                               # The maximum number of times to retry a request to an indexer if it times out.
 use_cache = true                              # If true, search results will be cached to speed up subsequent searches.
 cache_ttl = 300                               # The time in seconds that search results will be cached.
-seed_ratio = 1.5                              # Target upload/download ratio. Seeding stops when reached. Omit or set None for infinite seeding.
+disable_seeding = false                       # If true, torrents will be paused immediately after download completes (no seeding).
 
 [indexers]
 default = "jackett"                           # The name of the default indexer to use if none is specified at runtime

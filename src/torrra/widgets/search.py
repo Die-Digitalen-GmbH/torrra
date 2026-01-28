@@ -284,9 +284,11 @@ class SearchContent(Vertical):
         self._details_panel.remove_class("hidden")
         self._details_panel.focus()
 
+    def focus_search_input(self) -> None:
+        """Focus the search input field."""
+        self._search_input.focus()
+
     def _get_indexer_instance(self) -> BaseIndexer:
-        if self._indexer_instance_cache:
-            return self._indexer_instance_cache
 
         name = self.indexer.name
         indexer_cls_str = f"torrra.indexers.{name}.{name.title()}Indexer"

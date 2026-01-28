@@ -21,7 +21,13 @@ class DownloadManager:
     }
 
     def __init__(self) -> None:
-        self.session: lt.session = lt.session({"listen_interfaces": "0.0.0.0:6881"})
+        settings = {"listen_interfaces": "0.0.0.0:6881"}
+
+        # Disable uploading entirely if seeding is disabled
+        if get_config().get("general.disable_seeding", False):
+            settings["upload_rate_limit"] = 0
+
+        self.session: lt.session = lt.session(settings)
         self.torrents: dict[str, lt.torrent_handle] = {}
         self._metadata_updated: set[str] = (
             set()
@@ -138,3 +144,28 @@ class DownloadManager:
                 except (AttributeError, RuntimeError):
                     # Skip if metadata is not fully available yet
                     continue
+
+    def enforce_seeding_policy(self) -> None:
+        """Disable uploading and pause seeding torrents if disable_seeding is enabled."""
+        disable_seeding = get_config().get("general.disable_seeding", False)
+
+        # Enforce upload rate limit based on config (0 = no upload, unlimited otherwise)
+        settings = self.session.get_settings()
+        current_limit = settings.get("upload_rate_limit", 0)
+        if disable_seeding and current_limit != 0:
+            self.session.apply_settings({"upload_rate_limit": 0})
+
+        if not disable_seeding:
+            return
+
+        # Pause torrents that have finished downloading
+        for handle in self.torrents.values():
+            if not handle.is_valid():
+                continue
+
+            status = handle.status()
+            is_paused = (status.flags & lt.torrent_flags.paused) != 0
+            is_seeding = status.state == lt.torrent_status.states.seeding
+
+            if is_seeding and not is_paused:
+                handle.pause()

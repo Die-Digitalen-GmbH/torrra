@@ -74,9 +74,10 @@ class TorrraApp(App[None]):
 
     @work(exclusive=True)
     async def _show_welcome_and_search(self) -> None:
-        if search_query := await self.push_screen_wait(
+        search_query = await self.push_screen_wait(
             WelcomeScreen(indexer=self.indexer)
-        ):  # show both screens
+        )
+        if search_query is not None:
             await self.push_screen(
                 HomeScreen(
                     indexer=self.indexer,

@@ -15,6 +15,13 @@ DOWNLOADS_GROUP: list[str] = [
     "Completed",
 ]
 
+TRANSCODING_GROUP: list[str] = [
+    "Pending",
+    "In Progress",
+    "Completed",
+    "Failed",
+]
+
 
 class Sidebar(Tree[Any]):
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -38,7 +45,8 @@ class Sidebar(Tree[Any]):
 
         self._downloads_root_node: TreeNode[Any]
         self._downloads_nodes: dict[str, TreeNode[Any]] = {}
-        self._transcoding_node: TreeNode[Any]
+        self._transcoding_root_node: TreeNode[Any]
+        self._transcoding_nodes: dict[str, TreeNode[Any]] = {}
 
     @override
     def compose(self) -> ComposeResult:
@@ -57,9 +65,15 @@ class Sidebar(Tree[Any]):
             self._downloads_nodes[item] = node
         self._downloads_root_node = downloads_node
 
-        transcoding = root.add("Transcoding (0)", allow_expand=False)
-        transcoding.data = {"group_id": "transcoding_content"}
-        self._transcoding_node = transcoding
+        transcoding_node = root.add("Transcoding (0)", expand=True, allow_expand=False)
+        transcoding_node.data = {"group_id": "transcoding_content"}
+
+        for item in TRANSCODING_GROUP:
+            node = transcoding_node.add(f"{item} (0)", allow_expand=False)
+            node.data = {**transcoding_node.data, "group_type": item}
+
+            self._transcoding_nodes[item] = node
+        self._transcoding_root_node = transcoding_node
 
         self.select_node(search)  # default
         return super().compose()
@@ -94,5 +108,10 @@ class Sidebar(Tree[Any]):
             count = counts.get(item, 0)
             self._downloads_nodes[item].set_label(f"{item} ({count})")
 
-    def update_transcoding_count(self, count: int) -> None:
-        self._transcoding_node.set_label(f"Transcoding ({count})")
+    def update_transcoding_counts(self, counts: dict[str, int]) -> None:
+        total = sum(counts.values())
+        self._transcoding_root_node.set_label(f"Transcoding ({total})")
+
+        for item in TRANSCODING_GROUP:
+            count = counts.get(item, 0)
+            self._transcoding_nodes[item].set_label(f"{item} ({count})")

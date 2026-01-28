@@ -1,4 +1,5 @@
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Grid
 from textual.screen import Screen
 from textual.widgets import Input, Static
@@ -15,6 +16,9 @@ BANNER = """
 
 
 class WelcomeScreen(Screen[str]):
+    BINDINGS = [
+        Binding("ctrl+s", "open_search", "Search"),
+    ]
     def __init__(self, indexer: Indexer) -> None:
         super().__init__()
         self.indexer: Indexer = indexer
@@ -44,6 +48,12 @@ class WelcomeScreen(Screen[str]):
                     yield Static("ctrl+q", classes="key")
                     yield Static("[t]heme switcher", markup=False)
                     yield Static("ctrl+t", classes="key")
+                    yield Static("[s]earch", markup=False)
+                    yield Static("ctrl+s", classes="key")
+
+    def action_open_search(self) -> None:
+        """Skip to search view without a query."""
+        self.dismiss("")
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if query := event.value.strip():

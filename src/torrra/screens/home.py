@@ -1,4 +1,5 @@
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import ContentSwitcher
@@ -15,6 +16,9 @@ from torrra.widgets.transcoding import TranscodingContent
 
 
 class HomeScreen(Screen[None]):
+    BINDINGS = [
+        Binding("ctrl+s", "open_search", "Search", show=True),
+    ]
     def __init__(
         self,
         indexer: Indexer,
@@ -31,6 +35,7 @@ class HomeScreen(Screen[None]):
         self._sidebar: Sidebar
         self._content_switcher: ContentSwitcher
         self._downloads_content: DownloadsContent
+        self._search_content: SearchContent
         self._transcoding_content: TranscodingContent
 
     @override
@@ -56,6 +61,7 @@ class HomeScreen(Screen[None]):
 
         self._content_switcher = self.query_one(ContentSwitcher)
         self._downloads_content = self.query_one(DownloadsContent)
+        self._search_content = self.query_one(SearchContent)
         self._transcoding_content = self.query_one(TranscodingContent)
 
         # start torrents in background
@@ -98,11 +104,20 @@ class HomeScreen(Screen[None]):
 
         self._downloads_content.focus_table()
 
+    def action_open_search(self) -> None:
+        """Switch to search view and focus the search input."""
+        self._content_switcher.current = "search_content"
+        self._sidebar.select_node_by_group_id("search_content")
+        self._search_content.focus_search_input()
+
     def _update_downloads_data(self) -> None:
         dm = get_download_manager()
 
         # Check for metadata updates
         dm.check_metadata_updates()
+
+        # Enforce seeding policy (pause seeding torrents if disabled)
+        dm.enforce_seeding_policy()
 
         magnet_uris = list(dm.torrents.keys())
 
@@ -159,10 +174,20 @@ class HomeScreen(Screen[None]):
         # Process pending jobs (start new ones if capacity)
         await tm.process_queue_async()
 
-        # Update sidebar count
+        # Update sidebar counts
         jobs = tm.get_all_jobs()
-        active_count = sum(1 for j in jobs if j["status"] in ("pending", "in_progress"))
-        self._sidebar.update_transcoding_count(active_count)
+        counts = {"Pending": 0, "In Progress": 0, "Completed": 0, "Failed": 0}
+        status_map = {
+            "pending": "Pending",
+            "in_progress": "In Progress",
+            "completed": "Completed",
+            "failed": "Failed",
+        }
+        for job in jobs:
+            status_key = status_map.get(job["status"])
+            if status_key:
+                counts[status_key] += 1
+        self._sidebar.update_transcoding_counts(counts)
 
         # Update UI if transcoding content is visible
         if self._content_switcher.current == "transcoding_content":
