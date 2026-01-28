@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 import libtorrent as lt
 
@@ -91,6 +92,25 @@ class DownloadManager:
 
         idx = 1 if short else 0
         return self._STATE_MAP.get(status["state"], ("N/A", "N/A"))[idx]
+
+    def get_torrent_files(self, magnet_uri: str) -> list[str]:
+        """Get list of file paths for a torrent."""
+        handle = self.torrents.get(magnet_uri)
+        if not handle or not handle.is_valid() or not handle.has_metadata():
+            return []
+
+        torrent_info = handle.torrent_file()
+        if not torrent_info:
+            return []
+
+        save_path = handle.status().save_path
+        files = []
+        file_storage = torrent_info.files()
+        for i in range(file_storage.num_files()):
+            file_path = file_storage.file_path(i)
+            full_path = str(Path(save_path) / file_path)
+            files.append(full_path)
+        return files
 
     def check_metadata_updates(self) -> None:
         from torrra.core.torrent import get_torrent_manager

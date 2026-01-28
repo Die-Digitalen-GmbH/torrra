@@ -38,6 +38,7 @@ class Sidebar(Tree[Any]):
 
         self._downloads_root_node: TreeNode[Any]
         self._downloads_nodes: dict[str, TreeNode[Any]] = {}
+        self._transcoding_node: TreeNode[Any]
 
     @override
     def compose(self) -> ComposeResult:
@@ -55,6 +56,10 @@ class Sidebar(Tree[Any]):
 
             self._downloads_nodes[item] = node
         self._downloads_root_node = downloads_node
+
+        transcoding = root.add("Transcoding (0)", allow_expand=False)
+        transcoding.data = {"group_id": "transcoding_content"}
+        self._transcoding_node = transcoding
 
         self.select_node(search)  # default
         return super().compose()
@@ -88,3 +93,6 @@ class Sidebar(Tree[Any]):
         for item in DOWNLOADS_GROUP:
             count = counts.get(item, 0)
             self._downloads_nodes[item].set_label(f"{item} ({count})")
+
+    def update_transcoding_count(self, count: int) -> None:
+        self._transcoding_node.set_label(f"Transcoding ({count})")

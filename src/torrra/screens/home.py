@@ -5,11 +5,13 @@ from textual.widgets import ContentSwitcher
 from typing_extensions import override
 
 from torrra._types import Indexer, TorrentStatus
+from torrra.core.config import get_config
 from torrra.core.download import get_download_manager
 from torrra.core.torrent import get_torrent_manager
 from torrra.widgets.downloads import DownloadsContent
 from torrra.widgets.search import SearchContent
 from torrra.widgets.sidebar import Sidebar
+from torrra.widgets.transcoding import TranscodingContent
 
 
 class HomeScreen(Screen[None]):
@@ -29,6 +31,7 @@ class HomeScreen(Screen[None]):
         self._sidebar: Sidebar
         self._content_switcher: ContentSwitcher
         self._downloads_content: DownloadsContent
+        self._transcoding_content: TranscodingContent
 
     @override
     def compose(self) -> ComposeResult:
@@ -45,6 +48,7 @@ class HomeScreen(Screen[None]):
                     search_query=self.search_query,
                     use_cache=self.use_cache,
                 )
+                yield TranscodingContent()
 
     def on_mount(self) -> None:
         self._sidebar = self.query_one(Sidebar)
@@ -52,6 +56,7 @@ class HomeScreen(Screen[None]):
 
         self._content_switcher = self.query_one(ContentSwitcher)
         self._downloads_content = self.query_one(DownloadsContent)
+        self._transcoding_content = self.query_one(TranscodingContent)
 
         # start torrents in background
         tm, dm = get_torrent_manager(), get_download_manager()
@@ -73,6 +78,16 @@ class HomeScreen(Screen[None]):
         # start timer to update data on both sidebar
         # and downloads content table
         self.set_interval(1, self._update_downloads_data)
+        # start timer for transcoding updates (every 2 seconds)
+        self.set_interval(2, self._update_transcoding_data)
+
+        # Set up transcoding notifications
+        if get_config().get("transcoding.enabled", False):
+            from torrra.core.transcoder import get_transcode_manager
+
+            get_transcode_manager().set_notification_callback(
+                self._on_transcode_notification
+            )
 
     def on_sidebar_item_selected(self, event: Sidebar.ItemSelected) -> None:
         self.query_one(ContentSwitcher).current = event.group_id
@@ -110,3 +125,45 @@ class HomeScreen(Screen[None]):
         # only update downloads table if it is visible
         if self._content_switcher.current == "downloads_content":
             self._downloads_content.update_table_data(statuses)
+
+    def _on_transcode_notification(self, event: str, filename: str) -> None:
+        """Handle transcoding notifications."""
+        short_name = (filename[:40] + "...") if len(filename) > 40 else filename
+
+        if event == "started":
+            self.notify(
+                f"Started transcoding [b]{short_name}[/b]",
+                title="Transcoding Started",
+            )
+        elif event == "completed":
+            self.notify(
+                f"Finished transcoding [b]{short_name}[/b]",
+                title="Transcoding Finished",
+            )
+        elif event == "failed":
+            self.notify(
+                f"Failed to transcode [b]{short_name}[/b]",
+                title="Transcoding Failed",
+                severity="error",
+            )
+
+    async def _update_transcoding_data(self) -> None:
+        """Process transcoding queue and update UI."""
+        if not get_config().get("transcoding.enabled", False):
+            return
+
+        from torrra.core.transcoder import get_transcode_manager
+
+        tm = get_transcode_manager()
+
+        # Process pending jobs (start new ones if capacity)
+        await tm.process_queue_async()
+
+        # Update sidebar count
+        jobs = tm.get_all_jobs()
+        active_count = sum(1 for j in jobs if j["status"] in ("pending", "in_progress"))
+        self._sidebar.update_transcoding_count(active_count)
+
+        # Update UI if transcoding content is visible
+        if self._content_switcher.current == "transcoding_content":
+            self._transcoding_content.update_table_data()

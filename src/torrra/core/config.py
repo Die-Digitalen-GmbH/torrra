@@ -135,7 +135,14 @@ class Config:
                 "max_retries": DEFAULT_MAX_RETRIES,
                 "use_cache": True,
                 "cache_ttl": DEFAULT_CACHE_TTL,
-            }
+            },
+            "transcoding": {
+                "enabled": False,
+                "destination_path": "",  # Empty = same as general.download_path
+                "ffmpeg_path": "ffmpeg",
+                "max_parallel_jobs": 5,
+                "rules": [],
+            },
         }
 
     def _save_config(self) -> None:

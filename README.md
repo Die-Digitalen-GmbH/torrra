@@ -92,12 +92,58 @@ torrra # default indexer will be used
 
 - Search with [`Jackett`](https://github.com/Jackett/Jackett) or [`Prowlarr`](https://github.com/Prowlarr/Prowlarr)
 - Download torrents directly with pause/resume support
+- **Auto-transcoding** of video files after download (via ffmpeg)
 - Beautiful and responsive TUI built with [`Textual`](https://textual.textualize.io/)
 - Customizable themes (dark, light, and more)
 - Smart config + opt-in caching for fast searches
 - Native support for Linux, macOS, and Windows
 
 [Full feature list →](https://torrra.readthedocs.io/en/latest/#features)
+
+## Post-Download Transcoding
+
+Torrra can automatically transcode video files (e.g., MKV to MP4) after download using ffmpeg. Configure transcoding rules in your `config.toml`:
+
+```bash
+# Enable transcoding
+torrra config set transcoding.enabled true
+
+# Optionally set a custom destination folder (default: same as downloads)
+torrra config set transcoding.destination_path /path/to/transcoded
+```
+
+Then add transcoding rules to your config file (`~/.config/torrra/config.toml`):
+
+```toml
+[[transcoding.rules]]
+input_extension = ".mkv"
+output_format = "mp4"
+resolution = "1080p"
+
+[[transcoding.rules]]
+input_extension = ".avi"
+output_format = "m4v"
+resolution = "720p"
+```
+
+**Configuration options:**
+
+| Option | Description | Values |
+|--------|-------------|--------|
+| `transcoding.enabled` | Enable/disable auto-transcoding | `true`, `false` |
+| `transcoding.destination_path` | Output folder for transcoded files | Path string (empty = same as downloads) |
+| `transcoding.ffmpeg_path` | Path to ffmpeg binary | `"ffmpeg"` (default) or full path |
+| `transcoding.max_parallel_jobs` | Max concurrent transcoding jobs | `5` (default) |
+
+**Rule options:**
+
+| Field | Description | Examples |
+|-------|-------------|----------|
+| `input_extension` | File extension to match | `".mkv"`, `".avi"`, `".webm"`, `".flv"` |
+| `output_format` | Output container format | `"mp4"`, `"m4v"`, `"mkv"` |
+| `resolution` | Output resolution | `"original"`, `"720p"`, `"1080p"`, `"4k"` |
+
+Monitor transcoding progress in the **Transcoding** tab in the sidebar. Requires ffmpeg to be installed and available in your PATH.
 
 ## Contributing
 

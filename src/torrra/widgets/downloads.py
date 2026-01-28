@@ -5,9 +5,11 @@ from textual.containers import Vertical
 from typing_extensions import override
 
 from torrra._types import TorrentRecord, TorrentStatus
+from torrra.core.config import get_config
 from torrra.core.download import DownloadManager, get_download_manager
 from torrra.core.torrent import TorrentManager, get_torrent_manager
 from torrra.utils.helpers import human_readable_size
+from torrra.utils.video import is_transcodable_extension
 from torrra.widgets.data_table import AutoResizingDataTable
 from torrra.widgets.details_panel import DetailsPanel
 
@@ -109,6 +111,55 @@ class DownloadsContent(Vertical):
         )
         self._selected_torrent = None
 
+    def key_t(self) -> None:
+        """Manually trigger transcoding for completed torrent."""
+        if not self._selected_torrent:
+            return
+
+        magnet_uri = self._selected_torrent["magnet_uri"]
+        status = self._dm.get_torrent_status(magnet_uri)
+
+        # Only allow transcoding for completed/seeding downloads
+        if not status:
+            return
+
+        state_text = self._dm.get_torrent_state_text(status)
+        is_download_complete = status["progress"] >= 100 or state_text in (
+            "Seeding",
+            "Completed",
+        )
+
+        if not is_download_complete:
+            self.notify(
+                "Transcoding only available for completed downloads",
+                title="Cannot Transcode",
+                severity="warning",
+            )
+            return
+
+        if not get_config().get("transcoding.enabled", False):
+            self.notify(
+                "Transcoding is not enabled in config",
+                title="Transcoding Disabled",
+                severity="warning",
+            )
+            return
+
+        from torrra.core.transcoder import get_transcode_manager
+
+        job_ids = get_transcode_manager().process_completed_download(magnet_uri)
+        if job_ids:
+            self.notify(
+                f"Queued {len(job_ids)} file(s) for transcoding",
+                title="Transcoding Queued",
+            )
+        else:
+            self.notify(
+                "No transcodable files found (check transcoding rules)",
+                title="No Files to Transcode",
+                severity="warning",
+            )
+
     def on_details_panel_closed(self):
         self._selected_torrent = None
 
@@ -195,6 +246,19 @@ class DownloadsContent(Vertical):
                 self._tm.update_torrent_is_notified(torrent["magnet_uri"])
                 torrent["is_notified"] = True
 
+                # Trigger transcoding if enabled
+                if get_config().get("transcoding.enabled", False):
+                    from torrra.core.transcoder import get_transcode_manager
+
+                    job_ids = get_transcode_manager().process_completed_download(
+                        torrent["magnet_uri"],
+                    )
+                    if job_ids:
+                        self.notify(
+                            f"Queued {len(job_ids)} file(s) for transcoding",
+                            title="Transcoding Queued",
+                        )
+
             if (
                 self._selected_torrent
                 and self._selected_torrent["magnet_uri"] == torrent["magnet_uri"]
@@ -223,12 +287,29 @@ class DownloadsContent(Vertical):
         up_speed = f"{human_readable_size(status['up_speed'])}/s"
         down_speed = f"{human_readable_size(status['down_speed'])}/s"
 
+        # Check if transcoding is available for completed/seeding downloads
+        transcode_hint = ""
+        is_download_complete = status["progress"] >= 100 or state_text in (
+            "Seeding",
+            "Completed",
+        )
+        if is_download_complete and get_config().get("transcoding.enabled", False):
+            # Check if any files are transcodable
+            files = self._dm.get_torrent_files(current_torrent["magnet_uri"])
+            has_transcodable = any(
+                is_transcodable_extension(f.rsplit(".", 1)[-1])
+                for f in files
+                if "." in f
+            )
+            if has_transcodable:
+                transcode_hint = ", 't' to transcode"
+
         details = f"""
 [b]{current_torrent["title"]}[/b]
 [b]Size:[/b] {size} - [b]Status:[/b] {state_text} - [b]Source:[/b] {current_torrent["source"]}
 [b]S/L:[/b] {status["seeders"]}/{status["leechers"]} - [b]Up:[/b] {up_speed} - [b]Down:[/b] {down_speed}
 
-[dim]Press 'p' to pause/resume, 'd' to delete, or 'esc' to close.[/dim]
+[dim]Press 'p' to pause/resume, 'd' to delete{transcode_hint}, or 'esc' to close.[/dim]
 """
         # update details panel internal widgets
         self._details_panel.update_content(

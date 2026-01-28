@@ -16,6 +16,7 @@ from torrra.core.torrent import get_torrent_manager
 from torrra.indexers.base import BaseIndexer
 from torrra.utils.helpers import human_readable_size, lazy_import
 from torrra.utils.magnet import resolve_magnet_uri
+from torrra.utils.video import detect_video_extension, is_transcodable_extension
 from torrra.widgets.data_table import AutoResizingDataTable
 from torrra.widgets.details_panel import DetailsPanel
 from torrra.widgets.spinner import Spinner
@@ -260,9 +261,21 @@ class SearchContent(Vertical):
         if not self._selected_torrent:
             return
 
+        # Detect video file extension from title
+        video_ext = detect_video_extension(self._selected_torrent.title)
+        format_info = ""
+        if video_ext:
+            ext_display = video_ext.upper().lstrip(".")
+            if is_transcodable_extension(video_ext):
+                format_info = (
+                    f" - [b]Format:[/b] {ext_display} [green](transcodable)[/green]"
+                )
+            else:
+                format_info = f" - [b]Format:[/b] {ext_display}"
+
         details = f"""
 [b]{self._selected_torrent.title}[/b]
-[b]Size:[/b] {human_readable_size(self._selected_torrent.size)} - [b]Seeders:[/b] {self._selected_torrent.seeders} - [b]Leechers:[/b] {self._selected_torrent.leechers} - [b]Source:[/b] {self._selected_torrent.source}
+[b]Size:[/b] {human_readable_size(self._selected_torrent.size)} - [b]Seeders:[/b] {self._selected_torrent.seeders} - [b]Leechers:[/b] {self._selected_torrent.leechers} - [b]Source:[/b] {self._selected_torrent.source}{format_info}
 
 [dim]Press 'enter' to download or 'esc' to close.[/dim]
 """
