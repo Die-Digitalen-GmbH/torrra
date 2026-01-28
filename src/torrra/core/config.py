@@ -136,6 +136,7 @@ class Config:
                 "use_cache": True,
                 "cache_ttl": DEFAULT_CACHE_TTL,
                 "disable_seeding": False,
+                "disable_welcome_screen": False,
             },
             "transcoding": {
                 "enabled": False,

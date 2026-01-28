@@ -58,7 +58,17 @@ class TorrraApp(App[None]):
                 )
             )
         elif not (self.search_query and self.search_query.strip()):
-            self._show_welcome_and_search()
+            if get_config().get("general.disable_welcome_screen", False):
+                await self.push_screen(
+                    HomeScreen(
+                        indexer=self.indexer,
+                        search_query="",
+                        use_cache=self.use_cache,
+                        direct_download=None,
+                    )
+                )
+            else:
+                self._show_welcome_and_search()
         else:  # direct show search screen
             await self.push_screen(
                 HomeScreen(
