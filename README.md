@@ -155,6 +155,22 @@ resolution = "720p"
 
 Monitor transcoding progress in the **Transcoding** tab in the sidebar. Requires ffmpeg to be installed and available in your PATH.
 
+## Building from Source
+
+```bash
+git clone https://github.com/stabldev/torrra.git
+cd torrra
+uv tool install --editable .
+```
+
+This installs `torrra` into `~/.local/bin` as an editable package. Changes to the source code are reflected immediately without reinstalling.
+
+To uninstall:
+
+```bash
+uv tool uninstall torrra
+```
+
 ## Contributing
 
 Contributions are welcome and greatly appreciated!\
