@@ -1,3 +1,4 @@
+import hashlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -5,6 +6,9 @@ import libtorrent as lt
 
 from torrra._types import TorrentStatus
 from torrra.core.config import get_config
+from torrra.core.db import DB_DIR
+
+RESUME_DATA_DIR = DB_DIR / "resume_data"
 
 
 @lru_cache
@@ -23,15 +27,16 @@ class DownloadManager:
     def __init__(self) -> None:
         settings = {"listen_interfaces": "0.0.0.0:6881"}
 
-        # Disable uploading entirely if seeding is disabled
-        if get_config().get("general.disable_seeding", False):
-            settings["upload_rate_limit"] = 0
-
         self.session: lt.session = lt.session(settings)
         self.torrents: dict[str, lt.torrent_handle] = {}
         self._metadata_updated: set[str] = (
             set()
         )  # Track torrents whose metadata has been updated
+
+    @staticmethod
+    def _resume_data_path(magnet_uri: str) -> Path:
+        uri_hash = hashlib.sha1(magnet_uri.encode()).hexdigest()
+        return RESUME_DATA_DIR / f"{uri_hash}.fastresume"
 
     def add_torrent(self, magnet_uri: str, is_paused: bool = False) -> None:
         if magnet_uri in self.torrents:
@@ -50,6 +55,19 @@ class DownloadManager:
                     handle.pause() if is_paused else handle.resume()
                 return
 
+        # Try to load resume data first
+        resume_file = self._resume_data_path(magnet_uri)
+        if resume_file.exists():
+            try:
+                atp = lt.read_resume_data(resume_file.read_bytes())
+                atp.save_path = get_config().get("general.download_path")
+                if is_paused:
+                    atp.flags |= lt.torrent_flags.paused
+                self.torrents[magnet_uri] = self.session.add_torrent(atp)
+                return
+            except Exception:
+                resume_file.unlink(missing_ok=True)
+
         # Parse the magnet URI into torrent parameters (modern libtorrent 2.x API)
         atp = lt.parse_magnet_uri(magnet_uri)
         atp.save_path = get_config().get("general.download_path")
@@ -64,6 +82,7 @@ class DownloadManager:
         if handle and handle.is_valid():
             self.session.remove_torrent(handle)
             del self.torrents[magnet_uri]
+        self._resume_data_path(magnet_uri).unlink(missing_ok=True)
 
     def toggle_pause(self, magnet_uri: str) -> None:
         handle = self.torrents.get(magnet_uri)
@@ -146,26 +165,55 @@ class DownloadManager:
                     continue
 
     def enforce_seeding_policy(self) -> None:
-        """Disable uploading and pause seeding torrents if disable_seeding is enabled."""
-        disable_seeding = get_config().get("general.disable_seeding", False)
-
-        # Enforce upload rate limit based on config (0 = no upload, unlimited otherwise)
-        settings = self.session.get_settings()
-        current_limit = settings.get("upload_rate_limit", 0)
-        if disable_seeding and current_limit != 0:
-            self.session.apply_settings({"upload_rate_limit": 0})
-
-        if not disable_seeding:
+        """Pause completed torrents if disable_seeding is enabled."""
+        if not get_config().get("general.disable_seeding", False):
             return
 
-        # Pause torrents that have finished downloading
         for handle in self.torrents.values():
             if not handle.is_valid():
                 continue
 
             status = handle.status()
             is_paused = (status.flags & lt.torrent_flags.paused) != 0
-            is_seeding = status.state == lt.torrent_status.states.seeding
+            is_seeding = status.state in (
+                lt.torrent_status.states.seeding,
+                lt.torrent_status.states.finished,
+            )
 
             if is_seeding and not is_paused:
                 handle.pause()
+
+    def save_all_resume_data(self) -> None:
+        """Save resume data for all torrents to disk."""
+        RESUME_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        for magnet_uri, handle in self.torrents.items():
+            if not handle.is_valid() or not handle.has_metadata():
+                continue
+            try:
+                handle.save_resume_data()
+            except Exception:
+                continue
+
+        # Collect alerts to write resume data files
+        import time
+
+        deadline = time.monotonic() + 5
+        pending = {uri for uri, h in self.torrents.items() if h.is_valid() and h.has_metadata()}
+
+        while pending and time.monotonic() < deadline:
+            self.session.wait_for_alert(1000)
+            for alert in self.session.pop_alerts():
+                if isinstance(alert, lt.save_resume_data_alert):
+                    data = lt.write_resume_data_buf(alert.params)
+                    # Find the magnet_uri for this handle
+                    for uri, h in self.torrents.items():
+                        if h == alert.handle:
+                            self._resume_data_path(uri).write_bytes(data)
+                            pending.discard(uri)
+                            break
+                elif isinstance(alert, lt.save_resume_data_failed_alert):
+                    for uri, h in self.torrents.items():
+                        if h == alert.handle:
+                            pending.discard(uri)
+                            break

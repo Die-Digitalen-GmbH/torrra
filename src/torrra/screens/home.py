@@ -1,3 +1,4 @@
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -86,6 +87,8 @@ class HomeScreen(Screen[None]):
         self.set_interval(1, self._update_downloads_data)
         # start timer for transcoding updates (every 2 seconds)
         self.set_interval(2, self._update_transcoding_data)
+        # periodically save resume data (every 30 seconds)
+        self.set_interval(30, self._save_resume_data)
 
         # Set up transcoding notifications
         if get_config().get("transcoding.enabled", False):
@@ -94,6 +97,13 @@ class HomeScreen(Screen[None]):
             get_transcode_manager().set_notification_callback(
                 self._on_transcode_notification
             )
+
+    def on_unmount(self) -> None:
+        get_download_manager().save_all_resume_data()
+
+    @work(thread=True)
+    def _save_resume_data(self) -> None:
+        get_download_manager().save_all_resume_data()
 
     def on_sidebar_item_selected(self, event: Sidebar.ItemSelected) -> None:
         self.query_one(ContentSwitcher).current = event.group_id
