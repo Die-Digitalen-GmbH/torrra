@@ -14,7 +14,7 @@ class TranscodingContent(Vertical):
     COLS: list[tuple[str, str, int]] = [
         ("No", "no_col", 2),
         ("Source", "source", 20),
-        ("Output", "output", 6),
+        ("Output", "output", 10),
         ("Status", "status", 10),
         ("Progress", "progress", 8),
     ]
@@ -65,6 +65,15 @@ class TranscodingContent(Vertical):
         for idx, job in enumerate(self._jobs):
             source_name = Path(job["source_file"]).name
             output_format = Path(job["destination_file"] or "").suffix.lstrip(".")
+
+            # Get resolution from matching rule
+            rule = self._tm.get_matching_rule(job["source_file"])
+            resolution = rule.get("resolution", "original") if rule else "original"
+            if resolution != "original":
+                output_display = f"{output_format.upper()}, {resolution.upper()}"
+            else:
+                output_display = output_format.upper()
+
             status_display = self.STATUS_DISPLAY.get(job["status"], job["status"])
             progress = (
                 f"{int(job['progress'])}%" if job["status"] == "in_progress" else "-"
@@ -76,7 +85,7 @@ class TranscodingContent(Vertical):
             self._table.add_row(
                 str(idx + 1),
                 source_name,
-                output_format.upper(),
+                output_display,
                 status_display,
                 progress,
                 key=str(job["id"]),
