@@ -47,6 +47,12 @@ DetailsPanel {
       width: 1fr;
     }
   }
+  #files_container {
+    height: auto;
+    max-height: 8;
+    margin-top: 1;
+    scrollbar-size: 1 1;
+  }
 }
 
 Toast {

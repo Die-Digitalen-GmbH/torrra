@@ -16,6 +16,7 @@ from torrra.core.torrent import get_torrent_manager
 from torrra.indexers.base import BaseIndexer
 from torrra.utils.helpers import human_readable_size, lazy_import
 from torrra.utils.magnet import resolve_magnet_uri
+from torrra.utils.metadata import TorrentFile, fetch_torrent_files
 from torrra.utils.video import detect_video_extension, is_transcodable_extension
 from torrra.widgets.data_table import AutoResizingDataTable
 from torrra.widgets.details_panel import DetailsPanel
@@ -60,6 +61,10 @@ class SearchContent(Vertical):
         self._search_results_list: list[Torrent] = []  # original order from indexer
         self._selected_torrent: Torrent | None = None
         self._sort_mode: SortMode = SortMode.RELEVANCY
+
+        # metadata cache for file listings
+        self._metadata_cache: dict[str, list[TorrentFile] | None] = {}
+        self._metadata_fetch_in_progress: set[str] = set()
 
         # ui refs (cached later)
         self._search_input: Input
@@ -284,6 +289,22 @@ class SearchContent(Vertical):
         self._details_panel.remove_class("hidden")
         self._details_panel.focus()
 
+        # Fetch and display files
+        if magnet_uri in self._metadata_cache:
+            # Use cached result
+            files = self._metadata_cache[magnet_uri]
+            if files is not None:
+                self._details_panel.update_files(files)
+            else:
+                self._details_panel.show_files_error("Could not fetch file list")
+        elif magnet_uri not in self._metadata_fetch_in_progress:
+            # Start fetching metadata
+            self._details_panel.show_files_loading()
+            self._fetch_torrent_metadata(magnet_uri)
+        else:
+            # Fetch already in progress
+            self._details_panel.show_files_loading()
+
     def focus_search_input(self) -> None:
         """Focus the search input field."""
         self._search_input.focus()
@@ -304,3 +325,24 @@ class SearchContent(Vertical):
 
         self._indexer_instance_cache = indexer_instance
         return indexer_instance
+
+    @work(exclusive=False, group="metadata")
+    async def _fetch_torrent_metadata(self, magnet_uri: str) -> None:
+        """Fetch torrent metadata (file list) asynchronously."""
+        self._metadata_fetch_in_progress.add(magnet_uri)
+        try:
+            files = await fetch_torrent_files(magnet_uri)
+            self._metadata_cache[magnet_uri] = files
+
+            # Update UI if this torrent is still selected
+            if self._selected_torrent and self._selected_torrent.magnet_uri == magnet_uri:
+                if files is not None:
+                    self._details_panel.update_files(files)
+                else:
+                    self._details_panel.show_files_error("Could not fetch file list")
+        except Exception:
+            self._metadata_cache[magnet_uri] = None
+            if self._selected_torrent and self._selected_torrent.magnet_uri == magnet_uri:
+                self._details_panel.show_files_error("Failed to fetch metadata")
+        finally:
+            self._metadata_fetch_in_progress.discard(magnet_uri)
