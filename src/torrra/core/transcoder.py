@@ -303,7 +303,13 @@ class TranscodeManager:
             cmd.extend(["-vf", f"scale=-2:{height}"])
 
         # Audio codec - use AAC for compatibility
-        cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        # Use audio filter to normalize channel layouts (5.1(side) -> 5.1) and ensure
+        # proper channel mapping for formats like EAC3 that use non-standard layouts
+        cmd.extend([
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-af", "aformat=channel_layouts=5.1|stereo",
+        ])
 
         cmd.append(destination)
         return cmd
