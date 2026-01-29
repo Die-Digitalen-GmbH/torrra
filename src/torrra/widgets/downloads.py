@@ -68,6 +68,15 @@ class DownloadsContent(Vertical):
                 key=torrent["magnet_uri"],
             )
 
+        # Show detail panel for the first item
+        if self._torrents:
+            self._selected_torrent = self._torrents[0]
+            if status := self._dm.get_torrent_status(self._selected_torrent["magnet_uri"]):
+                self._update_details_panel(status)
+            self._details_panel.remove_class("hidden")
+        else:
+            self._details_panel.add_class("hidden")
+
     def key_p(self) -> None:
         if not self._selected_torrent:
             return
@@ -95,21 +104,25 @@ class DownloadsContent(Vertical):
             return
 
         magnet_uri = self._selected_torrent["magnet_uri"]
+        title = self._selected_torrent["title"]
+
         self._dm.remove_torrent(magnet_uri)
         self._tm.remove_torrent(magnet_uri)
 
         self._table.remove_row(magnet_uri)
         self._torrents = [t for t in self._torrents if t["magnet_uri"] != magnet_uri]
         self._table.border_title = f"all ({len(self._torrents)})"
-        self._details_panel.add_class("hidden")
 
-        title = self._selected_torrent["title"]
+        # Hide panel if no more torrents
+        if not self._torrents:
+            self._details_panel.add_class("hidden")
+            self._selected_torrent = None
+
         short_title = (title[:50] + "...") if len(title) > 40 else title
         self.notify(
             f"Removed [b]{short_title}[/b] and its data",
             title="Torrent Removed",
         )
-        self._selected_torrent = None
 
     def key_t(self) -> None:
         """Manually trigger transcoding for completed torrent."""
@@ -162,10 +175,30 @@ class DownloadsContent(Vertical):
 
     def on_details_panel_closed(self):
         self._selected_torrent = None
+        self._table.focus()
+
+    def on_data_table_row_highlighted(
+        self, event: AutoResizingDataTable.RowHighlighted
+    ) -> None:
+        """Update detail panel when cursor moves to a new row."""
+        row_key = cast(str, event.row_key.value)
+        self._selected_torrent = next(
+            (d for d in self._torrents if d["magnet_uri"] == row_key), None
+        )
+
+        if self._selected_torrent:
+            if status := self._dm.get_torrent_status(
+                self._selected_torrent["magnet_uri"]
+            ):
+                self._update_details_panel(status)
+            self._details_panel.remove_class("hidden")
+        else:
+            self._details_panel.add_class("hidden")
 
     def on_data_table_row_selected(
         self, event: AutoResizingDataTable.RowSelected
     ) -> None:
+        """Focus the detail panel when a row is selected (clicked or 'l' pressed)."""
         row_key = cast(str, event.row_key.value)
         self._selected_torrent = next(
             (d for d in self._torrents if d["magnet_uri"] == row_key), None
@@ -178,7 +211,7 @@ class DownloadsContent(Vertical):
                 self._update_details_panel(status)
             self._details_panel.remove_class("hidden")
             self._details_panel.focus()
-        else:  # selected torrent is invalid
+        else:
             self._details_panel.add_class("hidden")
 
     def focus_table(self) -> None:

@@ -15,6 +15,8 @@ class AutoResizingDataTable(DataTable[T]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("k", "cursor_up"),
         Binding("j", "cursor_down"),
+        Binding("up", "cursor_up"),
+        Binding("down", "cursor_down"),
         Binding("G", "scroll_bottom"),
         Binding("ctrl+u", "page_up"),
         Binding("ctrl+d", "page_down"),

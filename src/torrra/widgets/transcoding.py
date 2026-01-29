@@ -91,6 +91,14 @@ class TranscodingContent(Vertical):
                 key=str(job["id"]),
             )
 
+        # Show detail panel for the first item
+        if self._jobs:
+            self._selected_job = self._jobs[0]
+            self._update_details_panel(self._selected_job)
+            self._details_panel.remove_class("hidden")
+        else:
+            self._details_panel.add_class("hidden")
+
     def key_c(self) -> None:
         """Cancel selected job."""
         if not self._selected_job:
@@ -104,8 +112,6 @@ class TranscodingContent(Vertical):
                 title="Transcode Cancelled",
             )
             self._refresh_jobs()
-            self._details_panel.add_class("hidden")
-            self._selected_job = None
 
     def key_d(self) -> None:
         """Remove selected job from list."""
@@ -119,15 +125,29 @@ class TranscodingContent(Vertical):
             title="Job Removed",
         )
         self._refresh_jobs()
-        self._details_panel.add_class("hidden")
-        self._selected_job = None
 
     def on_details_panel_closed(self) -> None:
         self._selected_job = None
+        self._table.focus()
+
+    def on_data_table_row_highlighted(
+        self, event: AutoResizingDataTable.RowHighlighted
+    ) -> None:
+        """Update detail panel when cursor moves to a new row."""
+        row_key = cast(str, event.row_key.value)
+        job_id = int(row_key)
+        self._selected_job = next((j for j in self._jobs if j["id"] == job_id), None)
+
+        if self._selected_job:
+            self._update_details_panel(self._selected_job)
+            self._details_panel.remove_class("hidden")
+        else:
+            self._details_panel.add_class("hidden")
 
     def on_data_table_row_selected(
         self, event: AutoResizingDataTable.RowSelected
     ) -> None:
+        """Focus the detail panel when a row is selected (clicked or 'l' pressed)."""
         row_key = cast(str, event.row_key.value)
         job_id = int(row_key)
         self._selected_job = next((j for j in self._jobs if j["id"] == job_id), None)
