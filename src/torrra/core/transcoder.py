@@ -293,7 +293,12 @@ class TranscodeManager:
         resolution = rule.get("resolution", "original")
 
         # Video codec - use libx264 for mp4/m4v compatibility
-        cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "23"])
+        # Force 8-bit pixel format for iPad/Apple device compatibility
+        # (10-bit H.264 High 10 profile is not supported on most Apple devices)
+        cmd.extend([
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+        ])
 
         # Resolution scaling
         if resolution != "original":
