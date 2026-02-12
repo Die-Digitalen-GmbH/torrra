@@ -60,7 +60,7 @@ class SearchContent(Vertical):
         self._search_results_map: dict[str, Torrent] = {}
         self._search_results_list: list[Torrent] = []  # original order from indexer
         self._selected_torrent: Torrent | None = None
-        self._sort_mode: SortMode = SortMode.RELEVANCY
+        self._sort_mode: SortMode = SortMode.SEEDERS
 
         # metadata cache for file listings
         self._metadata_cache: dict[str, list[TorrentFile] | None] = {}
@@ -251,7 +251,7 @@ class SearchContent(Vertical):
         self._search_results_map = {t.magnet_uri: t for t in message.results}
 
         # Reset to default sort mode on new search
-        self._sort_mode = SortMode.RELEVANCY
+        self._sort_mode = SortMode.SEEDERS
         self._refresh_table()
 
     def on_details_panel_closed(self):
