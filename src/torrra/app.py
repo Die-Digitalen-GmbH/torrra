@@ -1,3 +1,4 @@
+import subprocess
 from typing import ClassVar
 
 from textual import work
@@ -7,7 +8,7 @@ from textual.reactive import Reactive
 from textual.types import CSSPathType
 
 from torrra._types import Indexer
-from torrra.core.config import get_config
+from torrra.core.config import CONFIG_FILE, get_config
 from torrra.screens.home import HomeScreen
 from torrra.screens.theme_selector import ThemeSelectorScreen
 from torrra.screens.welcome import WelcomeScreen
@@ -22,6 +23,7 @@ class TorrraApp(App[None]):
     ENABLE_COMMAND_PALETTE: ClassVar[bool] = False
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("ctrl+t", "switch_theme"),
+        Binding("ctrl+comma", "open_config"),
     ]
 
     def __init__(
@@ -78,6 +80,9 @@ class TorrraApp(App[None]):
                     direct_download=None,
                 )
             )
+
+    def action_open_config(self) -> None:
+        subprocess.Popen(["zed", str(CONFIG_FILE)])
 
     def action_switch_theme(self) -> None:
         self.push_screen(ThemeSelectorScreen())
