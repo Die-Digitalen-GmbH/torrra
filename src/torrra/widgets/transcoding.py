@@ -60,7 +60,7 @@ class TranscodingContent(Vertical):
         """Refresh the jobs list from database."""
         self._jobs = self._tm.get_all_jobs()
         self._table.clear()
-        self._table.border_title = f"transcoding ({len(self._jobs)})"
+        self._update_title()
 
         for idx, job in enumerate(self._jobs):
             source_name = Path(job["source_file"]).name
@@ -74,7 +74,7 @@ class TranscodingContent(Vertical):
             else:
                 output_display = output_format.upper()
 
-            status_display = self.STATUS_DISPLAY.get(job["status"], job["status"])
+            status_display = self._status_display(job)
             progress = (
                 f"{int(job['progress'])}%" if job["status"] == "in_progress" else "-"
             )
@@ -98,6 +98,27 @@ class TranscodingContent(Vertical):
             self._details_panel.remove_class("hidden")
         else:
             self._details_panel.add_class("hidden")
+
+    def _status_display(self, job: TranscodeJob) -> str:
+        if job["status"] == "in_progress" and self._tm.is_paused():
+            return "Paused"
+        return self.STATUS_DISPLAY.get(job["status"], job["status"])
+
+    def _update_title(self) -> None:
+        title = f"transcoding ({len(self._jobs)})"
+        if self._tm.is_paused():
+            title += " · paused"
+        self._table.border_title = title
+
+    def key_p(self) -> None:
+        """Pause or resume all transcoding."""
+        paused = not self._tm.is_paused()
+        self._tm.set_paused(paused)
+        if paused:
+            self.notify("Paused all transcoding", title="Transcoding Paused")
+        else:
+            self.notify("Resumed all transcoding", title="Transcoding Resumed")
+        self._refresh_jobs()
 
     def key_c(self) -> None:
         """Cancel selected job."""
@@ -182,7 +203,7 @@ class TranscodingContent(Vertical):
             # Update local cache
             job.update(updated)
 
-            status_display = self.STATUS_DISPLAY.get(job["status"], job["status"])
+            status_display = self._status_display(job)
             progress = (
                 f"{int(job['progress'])}%" if job["status"] == "in_progress" else "-"
             )
@@ -202,7 +223,7 @@ class TranscodingContent(Vertical):
 
     def _update_details_panel(self, job: TranscodeJob) -> None:
         source_path = Path(job["source_file"])
-        status_display = self.STATUS_DISPLAY.get(job["status"], job["status"])
+        status_display = self._status_display(job)
 
         details = f"""
 [b]{source_path.name}[/b]
@@ -215,7 +236,8 @@ class TranscodingContent(Vertical):
             details += f"\n[b]Error:[/b] [red]{job['error_message']}[/red]"
 
         details += (
-            "\n\n[dim]Press 'c' to cancel, 'd' to remove, or 'esc' to close.[/dim]"
+            "\n\n[dim]Press 'p' to pause/resume all, 'c' to cancel, 'd' to remove, "
+            "or 'esc' to close.[/dim]"
         )
 
         progress = job["progress"] if job["status"] == "in_progress" else 0

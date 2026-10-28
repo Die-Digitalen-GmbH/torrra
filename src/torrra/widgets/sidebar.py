@@ -108,9 +108,12 @@ class Sidebar(Tree[Any]):
             count = counts.get(item, 0)
             self._downloads_nodes[item].set_label(f"{item} ({count})")
 
-    def update_transcoding_counts(self, counts: dict[str, int]) -> None:
+    def update_transcoding_counts(
+        self, counts: dict[str, int], paused: bool = False
+    ) -> None:
         total = sum(counts.values())
-        self._transcoding_root_node.set_label(f"Transcoding ({total})")
+        label = f"Transcoding ({total}, paused)" if paused else f"Transcoding ({total})"
+        self._transcoding_root_node.set_label(label)
 
         for item in TRANSCODING_GROUP:
             count = counts.get(item, 0)

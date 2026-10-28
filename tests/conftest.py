@@ -8,7 +8,24 @@ import pytest
 from torrra._types import Indexer
 from torrra.app import TorrraApp
 from torrra.core import config as config_module
+from torrra.core import db as db_module
+from torrra.core import download as download_module
 from torrra.core.config import Config
+from torrra.core.transcoder import get_transcode_manager
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # never touch the real database: app tests mount HomeScreen, which restores
+    # the stored torrents and starts the stored transcoding jobs (real ffmpeg)
+    db_dir = tmp_path / "data"
+    monkeypatch.setattr(db_module, "DB_DIR", db_dir)
+    monkeypatch.setattr(db_module, "DB_FILE", db_dir / "torrra.db")
+    monkeypatch.setattr(download_module, "RESUME_DATA_DIR", db_dir / "resume_data")
+    # the managers are process-wide singletons: create the schema here, since
+    # get_torrent_manager() only does it on first use, and drop cached state
+    db_module.init_db()
+    get_transcode_manager.cache_clear()
 
 
 @pytest.fixture

@@ -20,6 +20,7 @@ class HomeScreen(Screen[None]):
     BINDINGS = [
         Binding("ctrl+s", "open_search", "Search", show=True),
     ]
+
     def __init__(
         self,
         indexer: Indexer,
@@ -73,6 +74,11 @@ class HomeScreen(Screen[None]):
                 torrent["magnet_uri"],
                 is_paused=torrent["is_paused"],
             )
+
+        # restart transcodes interrupted by the last quit or crash
+        from torrra.core.transcoder import get_transcode_manager
+
+        get_transcode_manager().requeue_interrupted_jobs()
 
         # Handle direct download if provided
         if self.direct_download:
@@ -197,7 +203,7 @@ class HomeScreen(Screen[None]):
             status_key = status_map.get(job["status"])
             if status_key:
                 counts[status_key] += 1
-        self._sidebar.update_transcoding_counts(counts)
+        self._sidebar.update_transcoding_counts(counts, paused=tm.is_paused())
 
         # Update UI if transcoding content is visible
         if self._content_switcher.current == "transcoding_content":

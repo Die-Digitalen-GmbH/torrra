@@ -56,4 +56,13 @@ def init_db() -> None:
             )
             """
         )
+        # runtime state that survives restarts (e.g. transcoding paused)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """
+        )
         conn.commit()

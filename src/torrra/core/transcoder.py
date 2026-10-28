@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import subprocess
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -61,6 +63,7 @@ class TranscodeManager:
     def __init__(self) -> None:
         self._active_processes: dict[int, asyncio.subprocess.Process] = {}
         self._total_durations: dict[int, float] = {}
+        self._paused: bool | None = None  # loaded from the db on first use
         # Callbacks for notifications: (event, filename)
         # Events: "started", "completed", "failed"
         self._notification_callback: (
@@ -176,6 +179,66 @@ class TranscodeManager:
             row = cursor.fetchone()
             return row[0] if row else 0
 
+    def is_paused(self) -> bool:
+        """Whether transcoding is globally paused."""
+        if self._paused is None:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT value FROM app_state WHERE key = 'transcoding_paused'"
+                )
+                row = cursor.fetchone()
+                self._paused = bool(row and row[0] == "1")
+        return self._paused
+
+    def set_paused(self, paused: bool) -> None:
+        """Pause or resume all transcoding.
+
+        Pausing holds the queue and freezes running ffmpeg processes, so they
+        continue where they stopped on resume. Where processes can't be frozen
+        (Windows), running jobs finish and only the queue is held.
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO app_state (key, value) VALUES ('transcoding_paused', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                ("1" if paused else "0",),
+            )
+            conn.commit()
+        self._paused = paused
+
+        for process in self._active_processes.values():
+            self._freeze(process, paused)
+
+    @staticmethod
+    def _freeze(process: asyncio.subprocess.Process, frozen: bool) -> None:
+        if not hasattr(signal, "SIGSTOP") or process.returncode is not None:
+            return
+        with suppress(ProcessLookupError):
+            process.send_signal(signal.SIGSTOP if frozen else signal.SIGCONT)
+
+    def requeue_interrupted_jobs(self) -> None:
+        """Requeue jobs left in progress by a previous run so they restart."""
+        # ffmpeg can't resume a partial output, so the job restarts from zero
+        # (the -y flag overwrites the partial file). Jobs running in this
+        # process are left alone.
+        active = list(self._active_processes)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                UPDATE transcode_jobs
+                SET status = 'pending', progress = 0, error_message = NULL
+                WHERE status = 'in_progress'
+                    AND id NOT IN ({",".join("?" * len(active))})
+                """,
+                active,
+            )
+            conn.commit()
+
     def update_job_status(
         self,
         job_id: int,
@@ -236,6 +299,8 @@ class TranscodeManager:
         if job_id in self._active_processes:
             process = self._active_processes[job_id]
             process.terminate()
+            # a frozen process only acts on the signal once continued
+            self._freeze(process, False)
             del self._active_processes[job_id]
 
         self.update_job_status(job_id, "cancelled")
@@ -295,10 +360,18 @@ class TranscodeManager:
         # Video codec - use libx264 for mp4/m4v compatibility
         # Force 8-bit pixel format for iPad/Apple device compatibility
         # (10-bit H.264 High 10 profile is not supported on most Apple devices)
-        cmd.extend([
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-            "-pix_fmt", "yuv420p",
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        )
 
         # Resolution scaling
         if resolution != "original":
@@ -310,11 +383,16 @@ class TranscodeManager:
         # Audio codec - use AAC for compatibility
         # Use audio filter to normalize channel layouts (5.1(side) -> 5.1) and ensure
         # proper channel mapping for formats like EAC3 that use non-standard layouts
-        cmd.extend([
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-af", "aformat=channel_layouts=5.1|stereo",
-        ])
+        cmd.extend(
+            [
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-af",
+                "aformat=channel_layouts=5.1|stereo",
+            ]
+        )
 
         cmd.append(destination)
         return cmd
@@ -414,6 +492,9 @@ class TranscodeManager:
                 stderr=asyncio.subprocess.PIPE,
             )
             self._active_processes[job_id] = process
+            # transcoding may have been paused while the process was spawning
+            if self.is_paused():
+                self._freeze(process, True)
 
             # Read progress from stdout
             if process.stdout:
@@ -425,12 +506,13 @@ class TranscodeManager:
 
             await process.wait()
 
-            # Clean up
-            if job_id in self._active_processes:
-                del self._active_processes[job_id]
-            if job_id in self._total_durations:
-                del self._total_durations[job_id]
+            # Clean up; cancel_job() already removed the process if the user
+            # cancelled, and it has set the status itself
+            cancelled = self._active_processes.pop(job_id, None) is None
+            self._total_durations.pop(job_id, None)
 
+            if cancelled:
+                return
             if process.returncode == 0:
                 self.update_job_status(job_id, "completed", progress=100)
                 await self._notify("completed", source_filename)
@@ -447,7 +529,15 @@ class TranscodeManager:
                 await self._notify("failed", source_filename)
 
         except asyncio.CancelledError:
-            self.update_job_status(job_id, "cancelled")
+            # The task is only cancelled when the app shuts down: stop ffmpeg
+            # and put the job back in the queue for the next start
+            self._total_durations.pop(job_id, None)
+            process = self._active_processes.pop(job_id, None)
+            if process and process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+            self.update_job_status(job_id, "pending", progress=0)
             raise
         except Exception as e:
             self.update_job_status(job_id, "failed", error_message=str(e))
@@ -461,6 +551,9 @@ class TranscodeManager:
 
     async def process_queue_async(self) -> None:
         """Start pending jobs if capacity available."""
+        if self.is_paused():
+            return
+
         max_parallel = get_config().get("transcoding.max_parallel_jobs", 5)
         in_progress = self.get_in_progress_count()
 
