@@ -2,6 +2,7 @@ from httpx import Response
 import pytest
 import respx
 
+from torrra.core.exceptions import IndexerError
 from torrra.indexers.base import BaseIndexer
 from torrra.indexers.jackett import JackettIndexer
 from torrra.indexers.prowlarr import ProwlarrIndexer
@@ -68,3 +69,39 @@ async def test_healthcheck(indexer: BaseIndexer) -> None:
     respx.get(url).mock(Response(200))
 
     assert await indexer.healthcheck() is True
+
+
+@respx.mock
+async def test_jackett_search_raises_when_all_indexers_fail() -> None:
+    indexer = JackettIndexer(url=MOCK_API_URL, api_key=MOCK_API_KEY)
+    error = (
+        "Jackett.Common.IndexerException: Exception (yts): Could not load file\n"
+        " ---> System.IO.FileNotFoundException: ..."
+    )
+    body = {
+        "Results": [],
+        "Indexers": [
+            {"ID": "yts", "Status": 1, "Error": error},
+            {"ID": "eztv", "Status": 1, "Error": error},
+        ],
+    }
+    respx.get(indexer.get_search_url()).mock(Response(200, json=body))
+
+    expected = r"all 2 jackett indexers failed\nException \(yts\): Could not load file$"
+    with pytest.raises(IndexerError, match=expected):
+        await indexer.search("arch", use_cache=False)
+
+
+@respx.mock
+async def test_jackett_search_empty_when_some_indexers_succeed() -> None:
+    indexer = JackettIndexer(url=MOCK_API_URL, api_key=MOCK_API_KEY)
+    body = {
+        "Results": [],
+        "Indexers": [
+            {"ID": "yts", "Status": 2, "Error": None},
+            {"ID": "eztv", "Status": 1, "Error": "Exception (eztv): blocked"},
+        ],
+    }
+    respx.get(indexer.get_search_url()).mock(Response(200, json=body))
+
+    assert await indexer.search("arch", use_cache=False) == []

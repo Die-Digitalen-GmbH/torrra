@@ -12,6 +12,7 @@ from typing_extensions import override
 from torrra._types import Indexer, Torrent
 from torrra.core.config import get_config
 from torrra.core.constants import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT
+from torrra.core.exceptions import IndexerError
 from torrra.core.torrent import get_torrent_manager
 from torrra.indexers.base import BaseIndexer
 from torrra.utils.helpers import human_readable_size, lazy_import
@@ -225,6 +226,9 @@ class SearchContent(Vertical):
             indexer = self._get_indexer_instance()
             results = await indexer.search(query, use_cache=self.use_cache)
             self.post_message(self.SearchResults(results or [], query))
+        except IndexerError as e:
+            self.notify(str(e), title="Search Failed", severity="error")
+            self.post_message(self.SearchResults([], query))
         except Exception:
             self.notify(
                 "Search failed, check indexer settings",

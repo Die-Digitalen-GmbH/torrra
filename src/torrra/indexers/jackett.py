@@ -36,7 +36,10 @@ class JackettIndexer(BaseIndexer):
                     resp = await client.get(url, params=params)
                     resp.raise_for_status()
 
-                torrents = [self._normalize_result(r) for r in resp.json()["Results"]]
+                data = resp.json()
+                self._raise_if_all_indexers_failed(data)
+
+                torrents = [self._normalize_result(r) for r in data["Results"]]
                 if use_cache and torrents:
                     cache.set(key, [t.to_dict() for t in torrents])
 
@@ -46,6 +49,21 @@ class JackettIndexer(BaseIndexer):
                     await asyncio.sleep(0.5 * 2**i)  # exponential backoff
                 else:  # raise error on final attempt
                     raise
+
+    def _raise_if_all_indexers_failed(self, data: dict[str, Any]) -> None:
+        # jackett answers 200 with empty results when every indexer errored
+        indexers = data.get("Indexers") or []
+        if data["Results"] or not indexers:
+            return
+
+        errors = [i["Error"] for i in indexers if i.get("Error")]
+        if len(errors) == len(indexers):
+            first_error = errors[0].strip().splitlines()[0].removeprefix(
+                "Jackett.Common.IndexerException: "
+            )
+            raise IndexerError(
+                f"all {len(indexers)} jackett indexers failed\n" + first_error
+            )
 
     @override
     async def healthcheck(self) -> bool:
