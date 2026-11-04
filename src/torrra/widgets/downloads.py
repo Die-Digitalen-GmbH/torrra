@@ -20,6 +20,7 @@ class DownloadsContent(Vertical):
         ("Title", "title", 25),
         ("St.", "status", 3),
         ("Done", "done_percent", 4),
+        ("S/L", "seeders_leechers", 7),
         ("Up", "up_speed", 6),
         ("Down", "down_speed", 6),
     ]
@@ -63,6 +64,7 @@ class DownloadsContent(Vertical):
                 torrent["title"],
                 "N/A",
                 "0%",
+                "0/0",
                 "0 B/s",
                 "0 B/s",
                 key=torrent["magnet_uri"],
@@ -71,7 +73,9 @@ class DownloadsContent(Vertical):
         # Show detail panel for the first item
         if self._torrents:
             self._selected_torrent = self._torrents[0]
-            if status := self._dm.get_torrent_status(self._selected_torrent["magnet_uri"]):
+            if status := self._dm.get_torrent_status(
+                self._selected_torrent["magnet_uri"]
+            ):
                 self._update_details_panel(status)
             self._details_panel.remove_class("hidden")
         else:
@@ -112,11 +116,7 @@ class DownloadsContent(Vertical):
         self._table.remove_row(magnet_uri)
         self._torrents = [t for t in self._torrents if t["magnet_uri"] != magnet_uri]
         self._table.border_title = f"all ({len(self._torrents)})"
-
-        # Hide panel if no more torrents
-        if not self._torrents:
-            self._details_panel.add_class("hidden")
-            self._selected_torrent = None
+        self._sync_selection_to_cursor()
 
         short_title = (title[:50] + "...") if len(title) > 40 else title
         self.notify(
@@ -177,11 +177,23 @@ class DownloadsContent(Vertical):
         self._selected_torrent = None
         self._table.focus()
 
-    def on_data_table_row_highlighted(
-        self, event: AutoResizingDataTable.RowHighlighted
-    ) -> None:
+    def on_data_table_row_highlighted(self) -> None:
         """Update detail panel when cursor moves to a new row."""
-        row_key = cast(str, event.row_key.value)
+        self._sync_selection_to_cursor()
+
+    def _sync_selection_to_cursor(self) -> None:
+        """Point the selection and details panel at the row under the cursor.
+
+        Reads the table, not a RowHighlighted payload: remove_row posts no
+        highlight when the cursor index stays the same, and a queued highlight
+        may name a row that has been removed since.
+        """
+        cursor = self._table.cursor_coordinate
+        row_key = (
+            self._table.coordinate_to_cell_key(cursor).row_key.value
+            if self._table.is_valid_row_index(cursor.row)
+            else None
+        )
         self._selected_torrent = next(
             (d for d in self._torrents if d["magnet_uri"] == row_key), None
         )
@@ -255,6 +267,11 @@ class DownloadsContent(Vertical):
                 torrent["magnet_uri"],
                 "done_percent",
                 f"{int(status['progress'])}%",
+            )
+            self._table.update_cell(
+                torrent["magnet_uri"],
+                "seeders_leechers",
+                f"{status['seeders']}/{status['leechers']}",
             )
             self._table.update_cell(
                 torrent["magnet_uri"],

@@ -6,8 +6,10 @@ from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Static
 
 from torrra._types import Indexer, Torrent
+from torrra._version import __version__
 from torrra.app import TorrraApp
 from torrra.screens.home import HomeScreen
+from torrra.widgets.sidebar import Sidebar
 
 
 @pytest.fixture
@@ -61,3 +63,19 @@ async def test_home_screen_search_no_results(app: TorrraApp, mock_indexer: Magic
 
         assert "Nothing Found" in str(loader_status.content)
         assert table.has_class("hidden")
+
+
+async def test_sidebar_shows_version_on_bottom_border(
+    app: TorrraApp, mock_indexer: MagicMock
+):
+    async with app.run_test():
+        sidebar = app.screen.query_one(Sidebar)
+
+        assert sidebar.border_subtitle == f"v{__version__}"
+        rendered = "".join(
+            strip.text
+            for strip in app.screen._compositor.render_strips()[
+                sidebar.region.bottom - 1 : sidebar.region.bottom
+            ]
+        )
+        assert f"v{__version__}" in rendered

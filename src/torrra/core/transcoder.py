@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
+import json
 import os
+import re
 import signal
 import subprocess
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
@@ -12,9 +15,70 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from torrra.core.config import get_config
 from torrra.core.db import get_db_connection
+from torrra.utils.video import VIDEO_EXTENSIONS
 
 if TYPE_CHECKING:
     pass
+
+# Subtitle encoder per output container. mov_text is what Apple's players offer
+# as a selectable track in mp4, but it is text-only: bitmap tracks (PGS, VobSub)
+# can't be converted to it. mkv stores any track as it is.
+_SUBTITLE_ENCODERS = {
+    ".mp4": "mov_text",
+    ".m4v": "mov_text",
+    ".mov": "mov_text",
+    ".mkv": "copy",
+}
+_TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
+_SIDECAR_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt"}
+_EPISODE = re.compile(r"s\d{1,2}e\d{1,3}", re.IGNORECASE)
+
+# ISO 639-2/T code (the form mp4 specifies) and the other ways releases spell it.
+# "hi" is left out: on a subtitle file it means hearing impaired, not Hindi.
+_LANGUAGES = {
+    "ara": "ar arabic",
+    "bul": "bg bulgarian",
+    "ces": "cs cze czech",
+    "dan": "da danish",
+    "deu": "de ger german deutsch",
+    "ell": "el gre greek",
+    "eng": "en english",
+    "est": "et estonian",
+    "fas": "fa per persian farsi",
+    "fin": "fi finnish",
+    "fra": "fr fre french francais français",
+    "heb": "he hebrew",
+    "hin": "hindi",
+    "hrv": "hr croatian",
+    "hun": "hu hungarian",
+    "ind": "id indonesian",
+    "ita": "it italian italiano",
+    "jpn": "ja japanese",
+    "kor": "ko korean",
+    "lav": "lv latvian",
+    "lit": "lt lithuanian",
+    "nld": "nl dut dutch",
+    "nor": "no nb nob norwegian",
+    "pol": "pl polish",
+    "por": "pt portuguese portugues português",
+    "ron": "ro rum romanian",
+    "rus": "ru russian",
+    "slk": "sk slo slovak",
+    "slv": "sl slovenian",
+    "spa": "es spanish espanol español",
+    "srp": "sr serbian",
+    "swe": "sv swedish",
+    "tha": "th thai",
+    "tur": "tr turkish",
+    "ukr": "uk ukrainian",
+    "vie": "vi vietnamese",
+    "zho": "zh chi chinese",
+}
+_LANGUAGE_CODES = {
+    alias: code
+    for code, aliases in _LANGUAGES.items()
+    for alias in (code, *aliases.split())
+}
 
 
 class TranscodeRule(TypedDict):
@@ -41,6 +105,51 @@ class TranscodeJob(TypedDict):
 @lru_cache
 def get_transcode_manager() -> TranscodeManager:
     return TranscodeManager()
+
+
+def _parse_language(text: str) -> str | None:
+    """Find a language in the end of a name, e.g. "Movie.en.forced" or "pt-BR"."""
+    tokens = re.findall(r"[^\W\d_]+", text.lower())
+    for token in reversed(tokens[-3:]):
+        if token in _LANGUAGE_CODES:
+            return _LANGUAGE_CODES[token]
+    return None
+
+
+def _track_language(tag: str | None) -> str:
+    """Normalize a stream's language tag; the mp4 muxer drops anything but 3 letters."""
+    tag = (tag or "").lower()
+    return _parse_language(tag) or (tag if len(tag) == 3 else "und")
+
+
+def _sidecar_language(sidecar: Path, source: Path) -> str:
+    """Read a subtitle file's language from its name, minus the video's own name."""
+    stem = sidecar.stem
+    if stem.lower().startswith(source.stem.lower()):
+        stem = stem[len(source.stem) :]
+    return _parse_language(stem) or "und"
+
+
+def _sidecar_charset(sidecar: Path) -> str | None:
+    """Name the charset ffmpeg must be told about: it fails the job on non-UTF-8."""
+    data = sidecar.read_bytes()
+    # ffmpeg detects these from the BOM itself
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return None
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "CP1252"
+    return None
+
+
+def _ffprobe_path() -> str:
+    # ffprobe is usually alongside ffmpeg
+    return (
+        get_config()
+        .get("transcoding.ffmpeg_path", "ffmpeg")
+        .replace("ffmpeg", "ffprobe")
+    )
 
 
 def check_ffmpeg_available() -> bool:
@@ -340,15 +449,129 @@ class TranscodeManager:
 
         return job_ids
 
+    def find_sidecar_subtitles(self, magnet_uri: str, source: str) -> list[Path]:
+        """Find the subtitle files of a torrent that belong to a video.
+
+        A file belongs to the video if it carries the video's name or episode,
+        or sits in a folder named after it. In a torrent with a single video,
+        every subtitle file does.
+        """
+        from torrra.core.download import get_download_manager
+
+        source_path = Path(source)
+        stem = source_path.stem.lower()
+        episode = _EPISODE.search(source_path.stem)
+        files = [Path(f) for f in get_download_manager().get_torrent_files(magnet_uri)]
+        videos = [
+            f
+            for f in files
+            if f.suffix.lower() in VIDEO_EXTENSIONS
+            and not f.stem.lower().endswith("sample")
+            and f.parent.name.lower() != "sample"
+        ]
+
+        def belongs(sidecar: Path) -> bool:
+            if videos == [source_path] or sidecar.stem.lower().startswith(stem):
+                return True
+            if stem in (part.lower() for part in sidecar.parts):
+                return True
+            where = f"{sidecar.parent.name}/{sidecar.name}"
+            found = _EPISODE.search(where)
+            return bool(episode and found and found[0].lower() == episode[0].lower())
+
+        return sorted(
+            f
+            for f in files
+            if f.suffix.lower() in _SIDECAR_EXTENSIONS and f.is_file() and belongs(f)
+        )
+
+    def probe_streams(self, file_path: str) -> list[dict[str, Any]]:
+        """List a file's streams using ffprobe; empty if it can't be read."""
+        try:
+            result = subprocess.run(
+                [_ffprobe_path(), "-v", "quiet", "-show_streams", "-of", "json"]
+                + [file_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                return json.loads(result.stdout).get("streams", [])
+        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+            pass
+        return []
+
+    def _subtitle_args(
+        self, source: str, destination: str, sidecars: Sequence[Path]
+    ) -> tuple[list[str], list[str]]:
+        """Build the ffmpeg input and output args that keep subtitles as tracks.
+
+        Both are empty when there is nothing to keep, or the container can't
+        hold it, which leaves stream selection to ffmpeg.
+        """
+        encoder = _SUBTITLE_ENCODERS.get(Path(destination).suffix.lower())
+        if not encoder:
+            return [], []
+
+        streams = self.probe_streams(source)
+        embedded = [
+            s
+            for s in streams
+            if s.get("codec_type") == "subtitle"
+            and (encoder == "copy" or s.get("codec_name") in _TEXT_SUBTITLE_CODECS)
+        ]
+        if not streams or not (embedded or sidecars):
+            return [], []
+
+        # -map turns off ffmpeg's own selection, so make the same picks it would.
+        # 0:V skips cover art, which ffmpeg counts as a video stream.
+        outputs = ["-map", "0:V:0"]
+        audio = [s for s in streams if s.get("codec_type") == "audio"]
+        if audio:
+            best = max(audio, key=lambda s: s.get("channels", 0))
+            outputs += ["-map", f"0:{best['index']}"]
+
+        languages: list[str] = []
+        for stream in embedded:
+            outputs += ["-map", f"0:{stream['index']}"]
+            languages.append(_track_language(stream.get("tags", {}).get("language")))
+
+        inputs: list[str] = []
+        for input_index, sidecar in enumerate(sidecars, start=1):
+            charset = _sidecar_charset(sidecar)
+            if charset:
+                inputs += ["-sub_charenc", charset]
+            inputs += ["-i", str(sidecar)]
+            outputs += ["-map", f"{input_index}:0"]
+            languages.append(_sidecar_language(sidecar, Path(source)))
+
+        outputs += ["-c:s", encoder]
+        for track, language in enumerate(languages):
+            outputs += [f"-metadata:s:s:{track}", f"language={language}"]
+            # subtitles stay off until picked, and the mp4 muxer splits tracks
+            # flagged default into separate groups, one for each, which a
+            # player's language menu can't treat as alternatives
+            outputs += [f"-disposition:s:{track}", "-default"]
+
+        return inputs, outputs
+
     def build_ffmpeg_command(
-        self, source: str, destination: str, rule: TranscodeRule
+        self,
+        source: str,
+        destination: str,
+        rule: TranscodeRule,
+        sidecars: Sequence[Path] = (),
     ) -> list[str]:
         """Build ffmpeg command based on transcoding rule."""
         ffmpeg_path = get_config().get("transcoding.ffmpeg_path", "ffmpeg")
+        subtitle_inputs, subtitle_outputs = self._subtitle_args(
+            source, destination, sidecars
+        )
         cmd = [
             ffmpeg_path,
             "-i",
             source,
+            *subtitle_inputs,
             "-y",  # Overwrite output
             "-progress",
             "pipe:1",  # Output progress to stdout
@@ -394,19 +617,16 @@ class TranscodeManager:
             ]
         )
 
+        cmd.extend(subtitle_outputs)
         cmd.append(destination)
         return cmd
 
     def get_video_duration(self, file_path: str) -> float | None:
         """Get video duration in seconds using ffprobe."""
-        ffmpeg_path = get_config().get("transcoding.ffmpeg_path", "ffmpeg")
-        # ffprobe is usually alongside ffmpeg
-        ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
-
         try:
             result = subprocess.run(
                 [
-                    ffprobe_path,
+                    _ffprobe_path(),
                     "-v",
                     "quiet",
                     "-show_entries",
@@ -475,7 +695,8 @@ class TranscodeManager:
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         # Build command
-        cmd = self.build_ffmpeg_command(source, destination, rule)
+        sidecars = self.find_sidecar_subtitles(job["magnet_uri"], source)
+        cmd = self.build_ffmpeg_command(source, destination, rule, sidecars)
 
         self.update_job_status(job_id, "in_progress", progress=0)
 

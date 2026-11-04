@@ -8,6 +8,8 @@ from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 from typing_extensions import override
 
+from torrra._version import __version__
+
 DOWNLOADS_GROUP: list[str] = [
     "Downloading",
     "Seeding",
@@ -42,6 +44,7 @@ class Sidebar(Tree[Any]):
         self.show_root: bool = False
         self.guide_depth: int = 3
         self.can_focus: bool = False  # re-enable focus later
+        self.border_subtitle: str = f"v{__version__}"
 
         self._downloads_root_node: TreeNode[Any]
         self._downloads_nodes: dict[str, TreeNode[Any]] = {}

@@ -107,7 +107,8 @@ class DownloadManager:
             down_speed=s.download_rate,
             up_speed=s.upload_rate,
             seeders=s.num_seeds,
-            leechers=s.num_peers,
+            # num_peers counts every connected peer, seeds included
+            leechers=s.num_peers - s.num_seeds,
             is_paused=(s.flags & lt.torrent_flags.paused) != 0,
         )
 
@@ -199,7 +200,9 @@ class DownloadManager:
         import time
 
         deadline = time.monotonic() + 5
-        pending = {uri for uri, h in self.torrents.items() if h.is_valid() and h.has_metadata()}
+        pending = {
+            uri for uri, h in self.torrents.items() if h.is_valid() and h.has_metadata()
+        }
 
         while pending and time.monotonic() < deadline:
             self.session.wait_for_alert(1000)
