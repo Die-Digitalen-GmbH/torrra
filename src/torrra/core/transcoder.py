@@ -32,6 +32,9 @@ _SUBTITLE_ENCODERS = {
 _TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
 _SIDECAR_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt"}
 _EPISODE = re.compile(r"s\d{1,2}e\d{1,3}", re.IGNORECASE)
+# A torrent picks these files, and each one is read and passed to ffmpeg.
+_MAX_SIDECAR_BYTES = 10 * 1024 * 1024
+_MAX_SIDECARS = 64
 
 # ISO 639-2/T code (the form mp4 specifies) and the other ways releases spell it.
 # "hi" is left out: on a subtitle file it means hearing impaired, not Hindi.
@@ -171,6 +174,8 @@ class TranscodeManager:
 
     def __init__(self) -> None:
         self._active_processes: dict[int, asyncio.subprocess.Process] = {}
+        # in progress, with no process yet; cancelling takes a job out of here
+        self._preparing: set[int] = set()
         self._total_durations: dict[int, float] = {}
         self._paused: bool | None = None  # loaded from the db on first use
         # Callbacks for notifications: (event, filename)
@@ -334,7 +339,7 @@ class TranscodeManager:
         # ffmpeg can't resume a partial output, so the job restarts from zero
         # (the -y flag overwrites the partial file). Jobs running in this
         # process are left alone.
-        active = list(self._active_processes)
+        active = [*self._active_processes, *self._preparing]
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -412,12 +417,13 @@ class TranscodeManager:
             self._freeze(process, False)
             del self._active_processes[job_id]
 
+        self._preparing.discard(job_id)
         self.update_job_status(job_id, "cancelled")
 
     def remove_job(self, job_id: int) -> None:
         """Remove a job from the database."""
         # Cancel if running
-        if job_id in self._active_processes:
+        if job_id in self._active_processes or job_id in self._preparing:
             self.cancel_job(job_id)
 
         with get_db_connection() as conn:
@@ -482,8 +488,11 @@ class TranscodeManager:
         return sorted(
             f
             for f in files
-            if f.suffix.lower() in _SIDECAR_EXTENSIONS and f.is_file() and belongs(f)
-        )
+            if f.suffix.lower() in _SIDECAR_EXTENSIONS
+            and f.is_file()
+            and f.stat().st_size <= _MAX_SIDECAR_BYTES
+            and belongs(f)
+        )[:_MAX_SIDECARS]
 
     def probe_streams(self, file_path: str) -> list[dict[str, Any]]:
         """List a file's streams using ffprobe; empty if it can't be read."""
@@ -660,6 +669,25 @@ class TranscodeManager:
                 pass
         return None
 
+    def _prepare_job(
+        self,
+        job_id: int,
+        magnet_uri: str,
+        source: str,
+        destination: str,
+        rule: TranscodeRule,
+    ) -> list[str]:
+        """Do a job's slow setup and build its command; runs in a worker thread."""
+        # Get video duration for progress calculation
+        duration = self.get_video_duration(source)
+        if duration:
+            self._total_durations[job_id] = duration
+
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+
+        sidecars = self.find_sidecar_subtitles(magnet_uri, source)
+        return self.build_ffmpeg_command(source, destination, rule, sidecars)
+
     async def start_job_async(self, job_id: int, job: TranscodeJob) -> None:
         """Start transcoding a specific job asynchronously."""
         source = job["source_file"]
@@ -685,34 +713,37 @@ class TranscodeManager:
             )
             return
 
-        # Get video duration for progress calculation
-        duration = self.get_video_duration(source)
-        if duration:
-            self._total_durations[job_id] = duration
-
-        # Ensure destination directory exists
-        dest_dir = Path(destination).parent
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build command
-        sidecars = self.find_sidecar_subtitles(job["magnet_uri"], source)
-        cmd = self.build_ffmpeg_command(source, destination, rule, sidecars)
-
+        # Claim the job before the first await, or the next run of the queue
+        # would start it again
         self.update_job_status(job_id, "in_progress", progress=0)
+        self._preparing.add(job_id)
 
         # Get filename for notifications
         source_filename = Path(source).name
 
-        # Notify that transcoding started
-        await self._notify("started", source_filename)
-
         try:
+            # Notify that transcoding started
+            await self._notify("started", source_filename)
+
+            cmd = await asyncio.to_thread(
+                self._prepare_job,
+                job_id,
+                job["magnet_uri"],
+                source,
+                destination,
+                rule,
+            )
+            if job_id not in self._preparing:  # cancelled in the meantime
+                self._total_durations.pop(job_id, None)
+                return
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             self._active_processes[job_id] = process
+            self._preparing.discard(job_id)
             # transcoding may have been paused while the process was spawning
             if self.is_paused():
                 self._freeze(process, True)
@@ -763,6 +794,8 @@ class TranscodeManager:
         except Exception as e:
             self.update_job_status(job_id, "failed", error_message=str(e))
             await self._notify("failed", source_filename)
+        finally:
+            self._preparing.discard(job_id)
 
     def process_queue(self) -> None:
         """Start pending jobs if capacity available (called from sync context)."""

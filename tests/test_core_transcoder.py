@@ -3,6 +3,7 @@ import json
 import shutil
 import signal
 import subprocess
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -11,6 +12,7 @@ import pytest
 from textual.app import App
 
 from torrra.core.db import get_db_connection
+from torrra.core import transcoder
 from torrra.core.transcoder import TranscodeManager
 
 posix_only = pytest.mark.skipif(
@@ -573,3 +575,91 @@ def test_sidecar_language_comes_from_its_name(
     cmd = tm.build_ffmpeg_command("The.Italian.Job.mkv", "out.mp4", RULE, (sidecar,))
 
     assert cmd[cmd.index("-metadata:s:s:0") + 1] == f"language={expected}"
+
+
+def test_oversized_subtitle_files_are_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    files = _torrent(monkeypatch, tmp_path, "Movie.mkv", "Movie.en.srt", "Movie.fr.srt")
+    with files[2].open("wb") as f:
+        f.truncate(transcoder._MAX_SIDECAR_BYTES + 1)
+
+    assert _sidecars(tmp_path, "Movie.mkv") == ["Movie.en.srt"]
+
+
+def test_subtitle_file_count_is_capped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    names = [f"Subs/{i:03}.srt" for i in range(transcoder._MAX_SIDECARS + 1)]
+    _torrent(monkeypatch, tmp_path, "Movie.mkv", *names)
+
+    assert len(_sidecars(tmp_path, "Movie.mkv")) == transcoder._MAX_SIDECARS
+
+
+def _failing_setup(*_args: Any) -> list[Path]:
+    raise OSError("unreadable")
+
+
+async def test_setup_error_fails_the_job(
+    manager: TranscodeManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    job_id = _insert_job(tmp_path, "pending")
+    job = manager.get_pending_jobs()[0]
+    monkeypatch.setattr(manager, "find_sidecar_subtitles", _failing_setup)
+
+    await manager.start_job_async(job_id, job)
+
+    assert _status(manager, job_id)[0] == "failed"
+    assert manager.get_pending_jobs() == []
+
+
+async def _start_blocked_in_setup(
+    manager: TranscodeManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[int, threading.Event, "asyncio.Task[None]"]:
+    job_id = _insert_job(tmp_path, "pending")
+    job = manager.get_pending_jobs()[0]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked(*_args: Any) -> list[str]:
+        entered.set()
+        release.wait(5)
+        return ["sleep", "30"]
+
+    monkeypatch.setattr(manager, "build_ffmpeg_command", blocked)
+    task = asyncio.create_task(manager.start_job_async(job_id, job))
+    # the loop keeps running: setup blocking it would hang here
+    while not entered.is_set():
+        await asyncio.sleep(0.01)
+    return job_id, release, task
+
+
+async def test_job_in_setup_is_claimed_and_survives_requeue(
+    manager: TranscodeManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    job_id, release, task = await _start_blocked_in_setup(
+        manager, monkeypatch, tmp_path
+    )
+
+    manager.requeue_interrupted_jobs()
+
+    assert _status(manager, job_id)[0] == "in_progress"
+    assert manager.get_pending_jobs() == []
+
+    release.set()
+    await _wait_until_running(manager, job_id)
+    manager.cancel_job(job_id)
+    await task
+
+
+async def test_cancelling_during_setup_starts_nothing(
+    manager: TranscodeManager, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    job_id, release, task = await _start_blocked_in_setup(
+        manager, monkeypatch, tmp_path
+    )
+
+    manager.cancel_job(job_id)
+    release.set()
+    await task
+
+    assert _status(manager, job_id)[0] == "cancelled"
+    assert not manager._active_processes  # pyright: ignore[reportPrivateUsage]

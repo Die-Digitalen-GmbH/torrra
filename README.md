@@ -153,7 +153,7 @@ resolution = "720p"
 | `output_format` | Output container format | `"mp4"`, `"m4v"`, `"mkv"` |
 | `resolution` | Output resolution | `"original"`, `"720p"`, `"1080p"`, `"4k"` |
 
-**Subtitles:** text subtitles are kept as selectable tracks with their language, both those embedded in the video and subtitle files in the torrent (`.srt`, `.ass`, `.ssa`, `.vtt`), whose language is read from the file name (`Movie.en.srt`, `Subs/2_French.srt`). They stay off until picked in the player. Output as `mp4`, `m4v` or `mov` can't hold image-based subtitles (PGS, VobSub), so those are skipped; `mkv` keeps them.
+**Subtitles:** text subtitles are kept as selectable tracks with their language, both those embedded in the video and subtitle files in the torrent (`.srt`, `.ass`, `.ssa`, `.vtt`), whose language is read from the file name (`Movie.en.srt`, `Subs/2_French.srt`). Subtitle files over 10 MiB are skipped, and a video takes at most 64 of them. They stay off until picked in the player. Output as `mp4`, `m4v` or `mov` can't hold image-based subtitles (PGS, VobSub), so those are skipped; `mkv` keeps them.
 
 Monitor transcoding progress in the **Transcoding** tab in the sidebar. Requires ffmpeg to be installed and available in your PATH.
 
