@@ -28,6 +28,13 @@ def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     get_transcode_manager.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def isolated_config(mock_config: Config):
+    # never read the real config: disable_welcome_screen or a theme set there
+    # changes which screen the app tests get
+    return mock_config
+
+
 @pytest.fixture
 def fast_sleep(monkeypatch: pytest.MonkeyPatch):
     # patch asyncio sleep to almost wake up instantly

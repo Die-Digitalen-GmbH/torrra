@@ -1,9 +1,19 @@
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from textual.pilot import Pilot
 
 from torrra._types import Torrent
+from torrra.screens import welcome
+from torrra.widgets import sidebar
+
+
+@pytest.fixture(autouse=True)
+def pinned_version(monkeypatch: pytest.MonkeyPatch):
+    # the version changes with every commit, a snapshot can't hold it
+    monkeypatch.setattr(welcome, "__version__", "0.0.0")
+    monkeypatch.setattr(sidebar, "__version__", "0.0.0")
 
 
 def test_home_screen_snapshot(
