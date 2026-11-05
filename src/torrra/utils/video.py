@@ -1,6 +1,7 @@
 """Video file utilities."""
 
 import re
+import string
 
 # Common video file extensions
 VIDEO_EXTENSIONS = {
@@ -17,6 +18,18 @@ VIDEO_EXTENSIONS = {
     ".ts",
     ".m2ts",
 }
+
+# Where a release name stops being a title. Bare "web" is left out because it
+# is also a word: Charlotte's Web.
+_RELEASE_TAG = re.compile(
+    r"\b(\d{3,4}[pi]|4k|uhd|hdtv|hdrip|b[dr]-?rip|blu-?ray|bdremux|dvdrip"
+    r"|web-?dl(rip)?|web-?rip|xvid|divx|[xh]\.? ?26[45]|hevc|av1)\b",
+    re.IGNORECASE,
+)
+_RELEASE_GROUP_PREFIX = re.compile(r"^\s*\[[^\]]*\]\s*")
+_EPISODE = re.compile(r"\bs\d{1,2}e\d{1,3}(?:-?e\d{1,3})*\b", re.IGNORECASE)
+# Not the start of a date, which is how a daily show tells its episodes apart.
+_YEAR = re.compile(r"\b(?:19|20)\d\d\b(?![ -]\d\d[ -]\d\d)")
 
 
 def detect_video_extension(title: str) -> str | None:
@@ -40,6 +53,40 @@ def detect_video_extension(title: str) -> str | None:
             return ext
 
     return None
+
+
+def humanize_title(stem: str) -> str:
+    """Turn a release name into a title: "Big Mouth S01E01 (2022)", "Aftersun (2022)".
+
+    The title is everything before the first sign of release info, which keeps
+    every word of it, even ones that look like tags ("The Darjeeling Limited").
+    A name that holds no title comes back unchanged.
+    """
+    name = stem.replace("_", " ")
+    if " " not in name:
+        name = name.replace(".", " ")
+    name = _RELEASE_GROUP_PREFIX.sub("", name)
+    if tag := _RELEASE_TAG.search(name):
+        name = name[: tag.start()]
+
+    episode = _EPISODE.search(name)
+    title = name[: episode.start()] if episode else name
+
+    # The last year is the release: 2001 A Space Odyssey 1968. A leading one is
+    # the title itself: 1917.
+    years = [year for year in _YEAR.finditer(title) if year.start() > 0]
+    year = years[-1] if years else None
+    if year:
+        title = title[: year.start()]
+    elif episode:
+        year = _YEAR.match(name[episode.end() :].lstrip(" (-"))
+
+    title = " ".join(title.split()).strip(" -([,")
+    if title.islower():
+        title = string.capwords(title)
+
+    parts = [title, episode and episode[0].upper(), year and f"({year[0]})"]
+    return " ".join(part for part in parts if part) or stem
 
 
 def is_transcodable_extension(extension: str) -> bool:

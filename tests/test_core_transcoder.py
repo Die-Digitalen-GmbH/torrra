@@ -363,6 +363,42 @@ def test_default_flags_are_cleared_so_tracks_stay_alternatives(tmp_path: Path):
     assert [t["disposition"]["default"] for t in _subtitle_tracks(out)] == [1, 0]
 
 
+def _format_tags(path: Path) -> dict[str, str]:
+    probe = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-show_format", "-of", "json", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(probe.stdout)["format"]["tags"]
+
+
+@needs_ffmpeg
+def test_output_is_titled_from_the_release_name(tmp_path: Path):
+    junk = "GalaxyTV - The.Innocent.S01E01.SPANISH.720p.NF.WEBRip.x264-GalaxyTV"
+    movie = _make_movie(tmp_path, ("spa", "hola"))
+    source = tmp_path / f"{junk.removeprefix('GalaxyTV - ')}.mkv"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(movie), "-map", "0", "-c", "copy"]
+        + ["-metadata", f"title={junk}", "-metadata", f"comment={junk}"]
+        + ["-metadata:s:a", "language=spa", str(source)],
+        check=True,
+    )
+    out = tmp_path / "out.mp4"
+
+    _transcode(source, out)
+
+    tags = _format_tags(out)
+    assert tags["title"] == "The Innocent S01E01"
+    assert "comment" not in tags
+    audio = [
+        s
+        for s in TranscodeManager().probe_streams(str(out))
+        if s["codec_type"] == "audio"
+    ]
+    assert audio[0]["tags"]["language"] == "spa"
+
+
 @needs_ffmpeg
 def test_video_and_audio_survive_mapping(tmp_path: Path):
     movie = _make_movie(tmp_path, ("eng", "hello"))

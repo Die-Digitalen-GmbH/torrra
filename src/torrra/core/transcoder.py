@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from torrra.core.config import get_config
 from torrra.core.db import get_db_connection
-from torrra.utils.video import VIDEO_EXTENSIONS
+from torrra.utils.video import VIDEO_EXTENSIONS, humanize_title
 
 if TYPE_CHECKING:
     pass
@@ -623,6 +623,17 @@ class TranscodeManager:
                 "192k",
                 "-af",
                 "aformat=channel_layouts=5.1|stereo",
+            ]
+        )
+
+        # Players list a file by its title tag. A source's own global tags come
+        # from the release group, so they go and audio tags stay.
+        cmd.extend(
+            [
+                "-map_metadata:g",
+                "-1",
+                "-metadata",
+                f"title={humanize_title(Path(source).stem)}",
             ]
         )
 
