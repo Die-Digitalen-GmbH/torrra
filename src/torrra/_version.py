@@ -35,8 +35,19 @@ def checkout_version(root: Path) -> str | None:
     return f"{found[1]}.{count}{dirty}"
 
 
+def checkout_root(module: Path) -> Path | None:
+    """Find the checkout a module of this package sits in, by the source layout.
+
+    Anywhere else the folder above it isn't ours to trust: a one-file build
+    unpacks under the shared temp dir, and git runs commands a repo's config names.
+    """
+    parents = module.resolve().parents
+    return parents[2] if parents[1].name == "src" else None
+
+
 def _resolve_version() -> str:
-    if checkout := checkout_version(Path(__file__).parents[2]):
+    root = checkout_root(Path(__file__))
+    if root and (checkout := checkout_version(root)):
         return checkout
     try:
         return version("torrra")

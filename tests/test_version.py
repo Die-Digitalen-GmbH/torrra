@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from torrra._version import checkout_version
+from torrra._version import checkout_root, checkout_version
 
 
 def _git(root: Path, *args: str) -> None:
@@ -46,3 +46,20 @@ def test_not_a_checkout(tmp_path: Path):
 
 def test_no_pyproject(tmp_path: Path):
     assert checkout_version(tmp_path) is None
+
+
+def test_source_layout_is_a_checkout(tmp_path: Path):
+    module = tmp_path / "src" / "torrra" / "_version.py"
+
+    assert checkout_root(module) == tmp_path.resolve()
+
+
+def test_frozen_build_is_not_a_checkout(tmp_path: Path):
+    # unpacked under the temp dir, whose parent anyone can write to
+    assert checkout_root(tmp_path / "_MEI123" / "torrra" / "_version.py") is None
+
+
+def test_installed_package_is_not_a_checkout(tmp_path: Path):
+    module = tmp_path / "site-packages" / "torrra" / "_version.py"
+
+    assert checkout_root(module) is None
